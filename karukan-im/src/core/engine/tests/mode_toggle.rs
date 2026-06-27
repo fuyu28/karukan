@@ -6,19 +6,49 @@ use super::*;
 fn test_mode_toggle_key_switches_alphabet_to_hiragana() {
     let mut engine = InputMethodEngine::new();
 
-    // Enter alphabet mode via Shift+A
+    // Enter alphabet mode via Shift+A (composition still active — committing
+    // now auto-reverts to Hiragana, so test the mid-composition switch instead).
     engine.process_key(&press_shift('A'));
     assert!(engine.input_mode == InputMode::Alphabet);
-    engine.process_key(&press_key(Keysym::RETURN)); // commit to clear state
 
-    // Alt_R press → switch to hiragana mode
+    // Alt_R press → switch to hiragana mode mid-composition.
     let result = engine.process_key(&press_key(Keysym::ALT_R));
     assert!(result.consumed);
     assert!(engine.input_mode != InputMode::Alphabet);
 
-    // Type 'a' → should be 'あ' (hiragana mode)
+    // Type 'a' → appended as hiragana after the existing "A".
     engine.process_key(&press('a'));
-    assert_eq!(engine.preedit().unwrap().text(), "あ");
+    assert_eq!(engine.preedit().unwrap().text(), "Aあ");
+}
+
+#[test]
+fn test_hiragana_key_switches_katakana_to_hiragana() {
+    let mut engine = InputMethodEngine::new();
+
+    // Type "ai" → "あい", then Ctrl+K → katakana mode.
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+    engine.process_key(&press_ctrl(Keysym::KEY_K));
+    assert!(engine.input_mode == InputMode::Katakana);
+    assert_eq!(engine.preedit().unwrap().text(), "アイ");
+
+    // The JIS かな key returns to hiragana, baking the katakana in.
+    let result = engine.process_key(&press_key(Keysym::HIRAGANA));
+    assert!(result.consumed);
+    assert!(engine.input_mode == InputMode::Hiragana);
+    assert_eq!(engine.input_buf.text, "アイ");
+}
+
+#[test]
+fn test_hiragana_key_noop_in_hiragana_is_consumed() {
+    let mut engine = InputMethodEngine::new();
+    assert!(engine.input_mode == InputMode::Hiragana);
+
+    // The かな key while already in hiragana is swallowed (no stray keysym
+    // reaches the app) and leaves the mode unchanged.
+    let result = engine.process_key(&press_key(Keysym::HIRAGANA));
+    assert!(result.consumed);
+    assert!(engine.input_mode == InputMode::Hiragana);
 }
 
 #[test]

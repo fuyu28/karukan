@@ -186,7 +186,7 @@ impl InputMethodEngine {
                 ch.is_ascii_uppercase() || (shift_active && ch.is_ascii_alphabetic());
 
             if is_shift_alpha && self.input_mode != InputMode::Alphabet {
-                self.input_mode = InputMode::Alphabet;
+                self.enter_alphabet_mode();
             }
             let ch = if self.input_mode == InputMode::Alphabet && is_shift_alpha {
                 ch.to_ascii_uppercase()
@@ -282,7 +282,11 @@ impl InputMethodEngine {
             // can escape stale or unwanted learned entries (mozc binds Tab to a
             // different conversion path — PredictAndConvert — in the same spirit).
             Keysym::TAB => self.start_conversion(true),
-            Keysym::SPACE | Keysym::DOWN => self.start_conversion(false),
+            // 変換 (Henkan) triggers conversion like Space — the conventional
+            // Japanese-IME binding. Unlike Space it isn't intercepted in
+            // alphabet mode (Space inserts a literal space there), so it also
+            // serves as a convert-and-commit escape from an alphabet run.
+            Keysym::SPACE | Keysym::DOWN | Keysym::HENKAN => self.start_conversion(false),
             Keysym::LEFT => self.move_caret_left(),
             Keysym::RIGHT => self.move_caret_right(),
             Keysym::HOME => self.move_caret_home(),
@@ -302,7 +306,7 @@ impl InputMethodEngine {
                         if self.input_mode == InputMode::Katakana {
                             self.bake_katakana();
                         }
-                        self.input_mode = InputMode::Alphabet;
+                        self.enter_alphabet_mode();
                         self.flush_romaji_to_composed();
                         self.live.text.clear();
                     }
@@ -438,6 +442,10 @@ impl InputMethodEngine {
         self.chunks.clear();
         self.state = InputState::Empty;
         self.exit_emoji_mode();
+        // Transient Alphabet mode ends with the composition: an inline acronym
+        // like `ISO` reverts to the base mode so the next character isn't
+        // forced to alphabet.
+        self.exit_alphabet_mode();
 
         // HideCandidates is required here: the auto-suggest/live-conversion
         // window may be open while Composing, and the macOS frontend's
@@ -486,6 +494,9 @@ impl InputMethodEngine {
         // whatever mode they were in before typing `:` so their next
         // word doesn't unexpectedly stay in ASCII-passthrough mode.
         self.exit_emoji_mode();
+        // Same for transient Alphabet mode — cancelling an inline acronym
+        // returns to the base mode rather than stranding the user in alphabet.
+        self.exit_alphabet_mode();
 
         let mut result = EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(Preedit::new()))

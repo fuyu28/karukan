@@ -228,38 +228,113 @@ fn test_mixed_hiragana_alphabet_input() {
 }
 
 #[test]
-fn test_alphabet_mode_persists_across_commit() {
+fn test_alphabet_mode_reverts_to_hiragana_after_commit() {
     let mut engine = InputMethodEngine::new();
 
-    // Enter alphabet mode via Shift+H
+    // Enter alphabet mode via Shift+H and type an inline acronym.
     engine.process_key(&press_shift('H'));
     assert!(engine.input_mode == InputMode::Alphabet);
 
-    // Type and commit
+    // Type and commit.
     engine.process_key(&press('i'));
     engine.process_key(&press_key(Keysym::RETURN));
     assert!(matches!(engine.state(), InputState::Empty));
 
-    // alphabet_mode should persist
-    assert!(engine.input_mode == InputMode::Alphabet);
+    // Alphabet mode is transient: committing the acronym reverts to the base
+    // (Hiragana) mode so the next character isn't forced to alphabet.
+    assert!(engine.input_mode != InputMode::Alphabet);
 
-    // New input should still be in alphabet mode
-    engine.process_key(&press('y'));
-    assert_eq!(engine.preedit().unwrap().text(), "y");
+    // The next character is converted as hiragana again.
+    engine.process_key(&press('a'));
+    assert_eq!(engine.preedit().unwrap().text(), "あ");
 }
 
 #[test]
-fn test_alphabet_mode_cancel_clears_flags() {
+fn test_alphabet_mode_reverts_to_hiragana_after_cancel() {
     let mut engine = InputMethodEngine::new();
 
-    // Enter alphabet mode via Shift+A, type, cancel
+    // Enter alphabet mode via Shift+A, type, then cancel.
     engine.process_key(&press_shift('A'));
     engine.process_key(&press('b'));
 
     engine.process_key(&press_key(Keysym::ESCAPE));
     assert!(matches!(engine.state(), InputState::Empty));
-    // Mode persists even after cancel
+    // Cancelling ends the transient alphabet composition: revert to Hiragana.
+    assert!(engine.input_mode != InputMode::Alphabet);
+
+    // The next character is hiragana again.
+    engine.process_key(&press('a'));
+    assert_eq!(engine.preedit().unwrap().text(), "あ");
+}
+
+#[test]
+fn test_alphabet_mode_reverts_to_katakana_base_after_commit() {
+    let mut engine = InputMethodEngine::new();
+
+    // In katakana mode, Shift+letter enters a transient alphabet run...
+    engine.process_key(&press('a'));
+    engine.process_key(&press_ctrl(Keysym::KEY_K));
+    assert!(engine.input_mode == InputMode::Katakana);
+    engine.process_key(&press_shift('X'));
     assert!(engine.input_mode == InputMode::Alphabet);
+
+    // ...and committing reverts to the katakana base it started from, not Hiragana.
+    engine.process_key(&press_key(Keysym::RETURN));
+    assert!(engine.input_mode == InputMode::Katakana);
+}
+
+#[test]
+fn test_hiragana_key_escapes_alphabet_mode() {
+    let mut engine = InputMethodEngine::new();
+
+    // Enter alphabet mode and type an acronym.
+    engine.process_key(&press_shift('I'));
+    engine.process_key(&press('s'));
+    engine.process_key(&press('o'));
+    assert!(engine.input_mode == InputMode::Alphabet);
+    assert_eq!(engine.preedit().unwrap().text(), "Iso");
+
+    // The dedicated JIS かな key returns to hiragana mid-composition.
+    let result = engine.process_key(&press_key(Keysym::HIRAGANA));
+    assert!(result.consumed);
+    assert!(engine.input_mode != InputMode::Alphabet);
+
+    // Continue typing → hiragana appended after the latin run.
+    engine.process_key(&press('a'));
+    assert_eq!(engine.preedit().unwrap().text(), "Isoあ");
+}
+
+#[test]
+fn test_hiragana_katakana_key_escapes_alphabet_mode() {
+    // Some layouts emit the Hiragana_Katakana toggle keysym for the かな key.
+    let mut engine = InputMethodEngine::new();
+    engine.process_key(&press_shift('A'));
+    assert!(engine.input_mode == InputMode::Alphabet);
+
+    let result = engine.process_key(&press_key(Keysym::HIRAGANA_KATAKANA));
+    assert!(result.consumed);
+    assert!(engine.input_mode != InputMode::Alphabet);
+}
+
+#[test]
+fn test_henkan_converts_and_commits_out_of_alphabet_mode() {
+    // 変換 in alphabet mode triggers conversion (it is NOT swallowed as a
+    // literal space the way Space is), so it doubles as a convert-and-commit
+    // escape from an alphabet run.
+    let mut engine = InputMethodEngine::new();
+    engine.process_key(&press_shift('A'));
+    engine.process_key(&press('b'));
+    assert!(engine.input_mode == InputMode::Alphabet);
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
+
+    // Henkan starts conversion → Conversion state (latin fallback / width variants).
+    engine.process_key(&press_key(Keysym::HENKAN));
+    assert!(matches!(engine.state(), InputState::Conversion { .. }));
+
+    // Committing the conversion ends the composition → back to Hiragana.
+    engine.process_key(&press_key(Keysym::RETURN));
+    assert!(matches!(engine.state(), InputState::Empty));
+    assert!(engine.input_mode != InputMode::Alphabet);
 }
 
 #[test]

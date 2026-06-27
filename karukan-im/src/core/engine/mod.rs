@@ -139,6 +139,13 @@ pub struct InputMethodEngine {
     /// they were instead of dropping them in Hiragana every time. `None`
     /// whenever the current mode is not Emoji.
     pre_emoji_mode: Option<InputMode>,
+    /// Base mode (Hiragana/Katakana) the user was in immediately before
+    /// Shift+letter switched them into [`InputMode::Alphabet`]. Alphabet mode
+    /// is transient — it's meant for inline acronyms/words (e.g. typing
+    /// `ISO`) — so commit/cancel/erase-to-empty reverts to this mode rather
+    /// than stranding the user in alphabet input. `None` whenever the current
+    /// mode is not Alphabet. Mirrors [`Self::pre_emoji_mode`].
+    pre_alpha_mode: Option<InputMode>,
     /// Composed input buffer (hiragana text, cursor position)
     input_buf: InputBuffer,
     /// Live conversion state
@@ -171,6 +178,7 @@ impl InputMethodEngine {
             metrics: ConversionMetrics::default(),
             input_mode: InputMode::Hiragana,
             pre_emoji_mode: None,
+            pre_alpha_mode: None,
             input_buf: InputBuffer::new(),
             live: LiveConversion::default(),
             chunks: Vec::new(),
@@ -244,6 +252,7 @@ impl InputMethodEngine {
         self.converters.romaji.reset();
         self.input_mode = InputMode::Hiragana;
         self.pre_emoji_mode = None;
+        self.pre_alpha_mode = None;
         self.input_buf.clear();
         self.live.text.clear();
         self.chunks.clear();
@@ -258,6 +267,28 @@ impl InputMethodEngine {
     pub(super) fn exit_emoji_mode(&mut self) {
         if self.input_mode == InputMode::Emoji {
             self.input_mode = self.pre_emoji_mode.take().unwrap_or(InputMode::Hiragana);
+        }
+    }
+
+    /// Switch into [`InputMode::Alphabet`], remembering the base mode so the
+    /// composition's end can revert to it. Only Hiragana/Katakana are recorded
+    /// as a base — entering from any other mode reverts to Hiragana on exit.
+    pub(super) fn enter_alphabet_mode(&mut self) {
+        if matches!(self.input_mode, InputMode::Hiragana | InputMode::Katakana) {
+            self.pre_alpha_mode = Some(self.input_mode);
+        }
+        self.input_mode = InputMode::Alphabet;
+    }
+
+    /// Leave the transient [`InputMode::Alphabet`], restoring the base mode the
+    /// user was in before Shift+letter switched them into it (Hiragana if none
+    /// was saved). Called whenever a composition ends so an inline acronym like
+    /// `ISO` doesn't strand the next word in alphabet input. No-op when not in
+    /// Alphabet mode; always clears the saved base so it can't leak forward.
+    pub(super) fn exit_alphabet_mode(&mut self) {
+        let base = self.pre_alpha_mode.take();
+        if self.input_mode == InputMode::Alphabet {
+            self.input_mode = base.unwrap_or(InputMode::Hiragana);
         }
     }
 
@@ -281,6 +312,10 @@ impl InputMethodEngine {
             // as a literal emoji-query char (and so a Katakana-mode user
             // lands back in Katakana, not Hiragana).
             self.exit_emoji_mode();
+            // Likewise leave transient Alphabet mode: erasing an inline
+            // acronym back to nothing ends that composition, so the next
+            // word should start in the base mode, not stay in alphabet.
+            self.exit_alphabet_mode();
             Some(
                 EngineResult::consumed()
                     .with_action(EngineAction::UpdatePreedit(Preedit::new()))
@@ -401,20 +436,26 @@ impl InputMethodEngine {
         self.surrounding_context = Some(SurroundingContext { left, right });
     }
 
-    /// Handle mode toggle keys (Right Alt/Super/Meta/Hyper): one-way non-Hiragana → Hiragana.
-    /// Returns `Some(result)` if the key was handled, `None` if not a mode toggle key.
+    /// Handle keys that force a one-way switch back to Hiragana:
+    /// the right-side modifier the macOS frontend uses (Right Alt/Super/Meta/Hyper)
+    /// and the dedicated JIS かな key (`Hiragana` / `Hiragana_Katakana`), which is
+    /// the natural escape on a Linux keyboard. Returns `Some(result)` if the key
+    /// was handled, `None` if it is neither kind of key.
     fn handle_mode_toggle_key(&mut self, key: &KeyEvent) -> Option<EngineResult> {
-        if !key.keysym.is_mode_toggle_key() {
+        let is_modifier_toggle = key.keysym.is_mode_toggle_key();
+        let is_hiragana_key = key.keysym.is_hiragana_key();
+        if !is_modifier_toggle && !is_hiragana_key {
             return None;
         }
-        // Only consume the key when actually switching; otherwise pass through
-        // so the system can properly track modifier state.
         if key.is_press && self.input_mode != InputMode::Hiragana {
             // Bake katakana before switching so preedit doesn't revert
             if self.input_mode == InputMode::Katakana {
                 self.bake_katakana();
             }
             self.input_mode = InputMode::Hiragana;
+            // The transient-alphabet base no longer applies once we explicitly
+            // switch to Hiragana; drop it so a later commit can't revert.
+            self.pre_alpha_mode = None;
             self.flush_romaji_to_composed();
             let aux = self.format_aux_composing();
             if matches!(self.state, InputState::Composing { .. }) {
@@ -426,6 +467,12 @@ impl InputMethodEngine {
                 );
             }
             return Some(EngineResult::consumed().with_action(EngineAction::UpdateAuxText(aux)));
+        }
+        // Not switching. The dedicated かな key produces no text, so swallow it
+        // rather than leaking a stray keysym to the app. A right-side modifier,
+        // by contrast, must pass through so the system keeps tracking its state.
+        if is_hiragana_key && key.is_press {
+            return Some(EngineResult::consumed());
         }
         Some(EngineResult::not_consumed())
     }
@@ -509,6 +556,7 @@ impl InputMethodEngine {
                 self.input_buf.clear();
                 self.live.text.clear();
                 self.state = InputState::Empty;
+                self.exit_alphabet_mode();
                 self.surrounding_context = None;
                 text
             }
@@ -521,6 +569,7 @@ impl InputMethodEngine {
                 }
                 self.input_buf.clear();
                 self.state = InputState::Empty;
+                self.exit_alphabet_mode();
                 self.surrounding_context = None;
                 text
             }

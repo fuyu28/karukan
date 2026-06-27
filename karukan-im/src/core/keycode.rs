@@ -85,6 +85,16 @@ impl Keysym {
     pub const F11: Keysym = Keysym(0xffc8);
     pub const F12: Keysym = Keysym(0xffc9);
 
+    // Japanese input keys (JIS keyboard). These are the dedicated keys a
+    // Linux/fcitx5 user reaches for; the macOS frontend relies on a
+    // right-Command tap (Super_R/Meta_R) instead, which most Linux keyboards
+    // don't provide.
+    pub const MUHENKAN: Keysym = Keysym(0xff22); // 無変換
+    pub const HENKAN: Keysym = Keysym(0xff23); // 変換 (convert)
+    pub const HIRAGANA: Keysym = Keysym(0xff25); // ひらがな
+    pub const KATAKANA: Keysym = Keysym(0xff26); // カタカナ
+    pub const HIRAGANA_KATAKANA: Keysym = Keysym(0xff27); // かな (ひらがな/カタカナ toggle)
+
     /// Check if this keysym represents a printable character
     pub fn is_printable(&self) -> bool {
         // ASCII printable range (0x20-0x7e)
@@ -126,6 +136,15 @@ impl Keysym {
             *self,
             Self::ALT_R | Self::SUPER_R | Self::META_R | Self::HYPER_R
         )
+    }
+
+    /// Check if this is a dedicated "switch to hiragana" key on a JIS
+    /// keyboard. The かな key may arrive as either `Hiragana` or the
+    /// `Hiragana_Katakana` toggle keysym depending on the layout, so accept
+    /// both. Used to escape Alphabet/Katakana mode back to Hiragana on Linux,
+    /// where the right-side modifier the macOS frontend uses isn't available.
+    pub fn is_hiragana_key(&self) -> bool {
+        matches!(*self, Self::HIRAGANA | Self::HIRAGANA_KATAKANA)
     }
 
     /// Check if this is a modifier key

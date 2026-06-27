@@ -578,7 +578,7 @@ impl InputMethodEngine {
         match key.keysym {
             Keysym::RETURN => self.commit_conversion(),
             Keysym::ESCAPE => self.cancel_conversion(),
-            Keysym::SPACE | Keysym::DOWN | Keysym::TAB => self.next_candidate(),
+            Keysym::SPACE | Keysym::DOWN | Keysym::TAB | Keysym::HENKAN => self.next_candidate(),
             Keysym::UP => self.prev_candidate(),
             Keysym::PAGE_DOWN => self.next_candidate_page(),
             Keysym::PAGE_UP => self.prev_candidate_page(),
@@ -652,6 +652,7 @@ impl InputMethodEngine {
         self.state = InputState::Empty;
         self.input_buf.text.clear();
         self.exit_emoji_mode();
+        self.exit_alphabet_mode();
 
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(Preedit::new()))
@@ -675,6 +676,9 @@ impl InputMethodEngine {
         self.state = InputState::Empty;
         self.input_buf.text.clear();
         self.exit_emoji_mode();
+        // Revert transient Alphabet before starting the new input so the typed
+        // continuation character lands in the base mode, not alphabet.
+        self.exit_alphabet_mode();
 
         // Start new input with the character
         let new_input_result = self.start_input(ch);
@@ -791,6 +795,7 @@ impl InputMethodEngine {
         // Commit immediately after digit selection
 
         self.state = InputState::Empty;
+        self.exit_alphabet_mode();
 
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(Preedit::new()))
