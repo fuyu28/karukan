@@ -44,6 +44,30 @@ fn test_engine_commit_composing() {
 }
 
 #[test]
+fn test_commit_word_ending_in_lone_n() {
+    // A word ending in a single `n` must commit with the moraic nasal ん,
+    // not a literal `n`: `hon` -> ほん (regression — used to commit ほn).
+    let mut engine = InputMethodEngine::new();
+    for c in "hon".chars() {
+        engine.process_key(&press(c));
+    }
+    // The trailing `n` is still pending in the preedit until flush.
+    assert_eq!(engine.preedit().unwrap().text(), "ほn");
+
+    let result = engine.process_key(&press_key(Keysym::RETURN));
+    let has_commit = result
+        .actions
+        .iter()
+        .any(|a| matches!(a, EngineAction::Commit(text) if text == "ほん"));
+    assert!(
+        has_commit,
+        "expected commit of ほん, got {:?}",
+        result.actions
+    );
+    assert!(matches!(engine.state(), InputState::Empty));
+}
+
+#[test]
 fn test_engine_backspace() {
     let mut engine = InputMethodEngine::new();
 

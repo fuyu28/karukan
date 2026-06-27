@@ -204,13 +204,16 @@ impl RomajiConverter {
                 result.push_str(h);
                 self.output.push_str(h);
                 self.buffer.drain(..search.matched_len);
-            } else {
-                // No match, pass through first character
-                if let Some(ch) = self.buffer.chars().next() {
-                    result.push(ch);
-                    self.output.push(ch);
-                    self.buffer.remove(0);
-                }
+            } else if let Some(ch) = self.buffer.chars().next() {
+                // No conversion rule matched. A lone `n` at flush time is the
+                // moraic nasal ん: nothing more is coming that could turn it into
+                // `na`/`ni`/…, so it can only be ん (this is why `hon` commits as
+                // ほん, not ほn). Every other bare consonant has no standalone
+                // kana and passes through literally.
+                let mapped = if ch == 'n' { 'ん' } else { ch };
+                result.push(mapped);
+                self.output.push(mapped);
+                self.buffer.remove(0);
             }
         }
 
@@ -364,6 +367,43 @@ mod tests {
         assert_eq!(flushed, "k");
         assert_eq!(conv.output(), "k");
         assert_eq!(conv.buffer(), "");
+    }
+
+    #[test]
+    fn test_flush_lone_n_becomes_kana() {
+        // A trailing single `n` is the moraic nasal: flushing it yields ん.
+        let mut conv = RomajiConverter::new();
+        conv.push('n');
+        assert_eq!(conv.buffer(), "n");
+
+        let flushed = conv.flush();
+        assert_eq!(flushed, "ん");
+        assert_eq!(conv.output(), "ん");
+        assert_eq!(conv.buffer(), "");
+    }
+
+    #[test]
+    fn test_flush_word_ending_in_n() {
+        // "hon": ho -> ほ, trailing n flushes to ん -> ほん (not ほn).
+        let mut conv = RomajiConverter::new();
+        for c in "hon".chars() {
+            conv.push(c);
+        }
+        conv.flush();
+        assert_eq!(conv.output(), "ほん");
+        assert_eq!(conv.buffer(), "");
+    }
+
+    #[test]
+    fn test_flush_n_before_leftover_yoon_prefix() {
+        // "ny" is an incomplete youon prefix; flushing maps n -> ん and leaves
+        // the dangling y as a literal: んy.
+        let mut conv = RomajiConverter::new();
+        conv.push('n');
+        conv.push('y');
+        assert_eq!(conv.buffer(), "ny");
+        let flushed = conv.flush();
+        assert_eq!(flushed, "んy");
     }
 
     #[test]
