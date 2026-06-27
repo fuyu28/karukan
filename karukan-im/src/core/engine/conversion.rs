@@ -24,6 +24,54 @@ fn width_annotation(text: &str) -> Option<&'static str> {
     }
 }
 
+/// Map a reading to one F6–F10 [`ConversionShape`] form. The kana shapes
+/// transform the hiragana reading; the alnum shapes map ASCII↔full-width per
+/// character (non-alphanumerics — including kana — pass through unchanged), so a
+/// shape that doesn't apply to the reading's script is a harmless no-op that
+/// dedups away in [`InputMethodEngine::convert_to_shape`].
+fn shape_text(reading: &str, shape: ConversionShape) -> String {
+    match shape {
+        ConversionShape::Hiragana => reading.to_string(),
+        ConversionShape::FullKatakana => karukan_engine::hiragana_to_katakana(reading),
+        ConversionShape::HalfKatakana => karukan_engine::kana::hiragana_to_half_katakana(reading),
+        ConversionShape::FullAlnum => reading
+            .chars()
+            .map(karukan_engine::kana::ascii_to_fullwidth_char)
+            .collect(),
+        ConversionShape::HalfAlnum => reading
+            .chars()
+            .map(karukan_engine::kana::fullwidth_to_ascii_char)
+            .collect(),
+    }
+}
+
+/// Mozc-style width/script annotation derived from a candidate's *text* (not
+/// the shape that produced it), so a cross-script no-op — e.g. a latin reading
+/// whose "hiragana" form is the latin itself — is labelled by what it actually
+/// is, not by the key that was pressed. Extends [`width_annotation`] (full
+/// hiragana/katakana) with the half-width katakana and half/full-width
+/// alphanumeric cases the F-keys introduce. `None` for mixed/kanji text.
+fn form_annotation(text: &str) -> Option<&'static str> {
+    if let Some(a) = width_annotation(text) {
+        return Some(a);
+    }
+    if text.is_empty() {
+        return None;
+    }
+    if text.chars().all(|c| ('\u{FF61}'..='\u{FF9F}').contains(&c)) {
+        Some("[半]カタカナ")
+    } else if text.chars().all(|c| c.is_ascii_alphanumeric()) {
+        Some("[半]英数")
+    } else if text
+        .chars()
+        .all(|c| matches!(c, '\u{FF10}'..='\u{FF19}' | '\u{FF21}'..='\u{FF3A}' | '\u{FF41}'..='\u{FF5A}'))
+    {
+        Some("[全]英数")
+    } else {
+        None
+    }
+}
+
 /// Helper for building a deduplicated list of conversion candidates.
 ///
 /// Two push paths exist: [`push`] dedups by text (skips duplicates), and
@@ -272,6 +320,65 @@ impl InputMethodEngine {
             .with_action(EngineAction::UpdateAuxText(
                 self.format_aux_conversion_with_page(reading, Some(&candidates)),
             ))
+    }
+
+    /// Force the current reading into a specific script/width form for the
+    /// F6–F10 function keys (see [`ConversionShape`]).
+    ///
+    /// Operates on the *reading* (`input_buf.text`: the composed hiragana, or
+    /// the typed latin in [`InputMode::Alphabet`]), so it behaves the same
+    /// whether the user is still Composing or already in Conversion — the
+    /// reading is preserved across `start_conversion`. Unlike Space it never
+    /// runs the kana-kanji model: the forms are pure rule-based transforms, so
+    /// the switch is instant.
+    ///
+    /// Enters Conversion state with every distinct F6→F10 form as a candidate
+    /// and `shape`'s form selected, so Enter commits it while Space/arrows still
+    /// step through the other forms (and another F-key jumps straight to its).
+    pub(super) fn convert_to_shape(&mut self, shape: ConversionShape) -> EngineResult {
+        // Fold any pending romaji into the reading and drop live-conversion /
+        // chunk state — we're replacing it with an explicit form. These are
+        // no-ops when called from Conversion state (romaji already reset, live
+        // already taken by start_conversion).
+        self.flush_romaji_to_composed();
+        self.live.text.clear();
+        self.chunks.clear();
+        self.converters.romaji.reset();
+        self.input_buf.cursor_pos = 0;
+
+        let reading = self.input_buf.text.clone();
+        if reading.is_empty() {
+            return EngineResult::consumed();
+        }
+
+        // Build the F6→F10 forms in order, deduping identical forms (e.g. the
+        // alnum shapes are no-ops on a kana reading and collapse into the
+        // hiragana form). Track which surviving entry matches the pressed
+        // shape so it starts selected.
+        let target = shape_text(&reading, shape);
+        let mut seen = HashSet::new();
+        let mut candidates: Vec<Candidate> = Vec::new();
+        let mut selected = 0;
+        for s in ConversionShape::ALL {
+            let text = shape_text(&reading, s);
+            if !seen.insert(text.clone()) {
+                continue;
+            }
+            if text == target {
+                selected = candidates.len();
+            }
+            let description = form_annotation(&text).map(str::to_string);
+            candidates.push(Candidate {
+                text,
+                reading: Some(reading.clone()),
+                source_label: Some(CandidateSource::Rewriter.label().to_string()),
+                description,
+            });
+        }
+
+        let mut candidate_list = CandidateList::new(candidates);
+        candidate_list.select(selected);
+        self.enter_conversion_state(&reading, candidate_list)
     }
 
     /// Search user and system dictionaries for candidates matching a reading.
@@ -583,6 +690,15 @@ impl InputMethodEngine {
             Keysym::PAGE_DOWN => self.next_candidate_page(),
             Keysym::PAGE_UP => self.prev_candidate_page(),
             Keysym::BACKSPACE => self.backspace_conversion(),
+            // F6–F10 re-shape the reading even mid-conversion: e.g. after Space
+            // shows kanji candidates, F7 switches to katakana of the same
+            // reading. Operates on the preserved reading, not the selected
+            // candidate, matching the Japanese-IME convention.
+            Keysym::F6 => self.convert_to_shape(ConversionShape::Hiragana),
+            Keysym::F7 => self.convert_to_shape(ConversionShape::FullKatakana),
+            Keysym::F8 => self.convert_to_shape(ConversionShape::HalfKatakana),
+            Keysym::F9 => self.convert_to_shape(ConversionShape::FullAlnum),
+            Keysym::F10 => self.convert_to_shape(ConversionShape::HalfAlnum),
             _ => {
                 // Ctrl+N / Ctrl+P: emacs-style candidate navigation
                 if key.modifiers.control_key && !key.modifiers.alt_key {
@@ -711,11 +827,18 @@ impl InputMethodEngine {
         self.input_buf.text = reading.clone();
         self.input_buf.cursor_pos = self.input_buf.text.chars().count();
 
-        // Reset romaji converter and set output to reading
+        // Reset the romaji converter, then re-feed a kana reading so the
+        // converter's state mirrors the restored buffer (kana pass straight
+        // through). We must NOT re-feed a non-kana reading: for a latin acronym
+        // from Alphabet mode (e.g. `Jis`), the romaji rules buffer a trailing
+        // consonant — the `s` gets stuck and the preedit/commit corrupts into
+        // `Jiss`. Alphabet input bypasses the romaji converter anyway, so
+        // leaving it reset is correct. (Reachable via F6–F10 / Tab → Escape.)
         self.converters.romaji.reset();
-        // We need to push each character to rebuild the state
-        for ch in reading.chars() {
-            self.converters.romaji.push(ch);
+        if karukan_engine::contains_kana(&reading) {
+            for ch in reading.chars() {
+                self.converters.romaji.push(ch);
+            }
         }
 
         let preedit = self.set_composing_state();

@@ -159,6 +159,38 @@ pub(crate) enum InputMode {
     Emoji,
 }
 
+/// Target script/width form for the F6–F10 function-key conversions, in the
+/// conventional Japanese-IME order: F6 ひらがな, F7 全角カタカナ, F8 半角カタカナ,
+/// F9 全角英数, F10 半角英数. Each variant maps the *reading* (the composed
+/// hiragana, or the typed latin in [`InputMode::Alphabet`]) to one fixed form —
+/// unlike Space, which runs kana-kanji conversion. See `convert_to_shape`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConversionShape {
+    /// F6 — hiragana (the reading as-is).
+    Hiragana,
+    /// F7 — full-width katakana (`あい` → `アイ`).
+    FullKatakana,
+    /// F8 — half-width katakana (`あい` → `ｱｲ`).
+    HalfKatakana,
+    /// F9 — full-width alphanumerics (`abc` → `ａｂｃ`).
+    FullAlnum,
+    /// F10 — half-width alphanumerics (`ａｂｃ` → `abc`).
+    HalfAlnum,
+}
+
+impl ConversionShape {
+    /// Every shape in F6→F10 order — the order `convert_to_shape` builds the
+    /// candidate list in, so Space/arrow navigation steps through the forms the
+    /// same way the dedicated keys are laid out on the keyboard.
+    pub(crate) const ALL: [ConversionShape; 5] = [
+        ConversionShape::Hiragana,
+        ConversionShape::FullKatakana,
+        ConversionShape::HalfKatakana,
+        ConversionShape::FullAlnum,
+        ConversionShape::HalfAlnum,
+    ];
+}
+
 /// One internal chunk of the composing buffer (at most
 /// `EngineConfig::composing_chunk_len` reading chars) together with its cached
 /// model conversion.

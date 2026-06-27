@@ -291,6 +291,15 @@ impl InputMethodEngine {
             Keysym::RIGHT => self.move_caret_right(),
             Keysym::HOME => self.move_caret_home(),
             Keysym::END => self.move_caret_end(),
+            // F6–F10: force the reading into a fixed script/width form
+            // (ひらがな / 全角カナ / 半角カナ / 全角英数 / 半角英数), the
+            // conventional Japanese-IME function-key conversions. Instant
+            // (no model call) — see `convert_to_shape`.
+            Keysym::F6 => self.convert_to_shape(ConversionShape::Hiragana),
+            Keysym::F7 => self.convert_to_shape(ConversionShape::FullKatakana),
+            Keysym::F8 => self.convert_to_shape(ConversionShape::HalfKatakana),
+            Keysym::F9 => self.convert_to_shape(ConversionShape::FullAlnum),
+            Keysym::F10 => self.convert_to_shape(ConversionShape::HalfAlnum),
             _ => {
                 if let Some(ch) = key.to_char()
                     && !key.modifiers.control_key
