@@ -364,6 +364,11 @@ impl InputMethodEngine {
             return self.refresh_input_state();
         }
 
+        // Revive a stranded romaji prefix before processing this char, so a
+        // bare consonant left in the buffer (e.g. `k` after typing `kp`,
+        // deleting the `ぱ`) can still combine: `k` + `a` → `か`, not `kあ`.
+        self.revive_pending_romaji_prefix();
+
         let prev_output_len = self.converters.romaji.output().chars().count();
         let _event = self.converters.romaji.push(ch);
         let curr_output_len = self.converters.romaji.output().chars().count();
@@ -392,6 +397,64 @@ impl InputMethodEngine {
         }
 
         self.refresh_input_state()
+    }
+
+    /// "Revive" a stranded romaji prefix so a freshly typed vowel can complete
+    /// it.
+    ///
+    /// When a consonant can't combine with what follows (`kp`), or a pending
+    /// consonant is flushed by an edit (backspace / cursor move / conversion
+    /// cancel), it lands in `input_buf` as a *literal* ASCII letter — e.g.
+    /// type `kpa` → `kぱ`, delete `ぱ`, and a bare `k` remains. That `k` looks
+    /// like a pending consonant but is finalized text, and the romaji
+    /// converter's output is left stale, so typing `a` used to yield `kあ`
+    /// instead of `か`.
+    ///
+    /// Before processing a new romaji char we detect the trailing run of ASCII
+    /// letters at the cursor and re-feed it to the (reset) converter. If it
+    /// stays entirely pending — a genuine incomplete prefix like `k` / `ky`,
+    /// not a pass-through like `q` — we take it back out of `input_buf`; it now
+    /// lives in the converter buffer and the caller's `push` completes it.
+    /// No-op in the common case: the char before the cursor is kana, or the
+    /// buffer is already mid-conversion.
+    fn revive_pending_romaji_prefix(&mut self) {
+        // Don't disturb an in-progress romaji sequence.
+        if !self.converters.romaji.buffer().is_empty() {
+            return;
+        }
+        let cursor = self.input_buf.cursor_pos;
+        if cursor == 0 {
+            return;
+        }
+        // Maximal run of ASCII letters immediately before the cursor.
+        let chars: Vec<char> = self.input_buf.text.chars().collect();
+        let mut start = cursor;
+        while start > 0 && chars[start - 1].is_ascii_alphabetic() {
+            start -= 1;
+        }
+        if start == cursor {
+            return;
+        }
+        let run: String = chars[start..cursor].iter().collect();
+
+        // Re-feed the run; the converter mirrors exactly how it would buffer
+        // these keystrokes. Reset first to drop any stale output coupled to an
+        // earlier edit.
+        self.converters.romaji.reset();
+        for c in run.chars() {
+            self.converters.romaji.push(c);
+        }
+        if self.converters.romaji.output().is_empty() && self.converters.romaji.buffer() == run {
+            // Genuine pending prefix: remove it from the buffer text. It now
+            // lives in the converter, and the caller's push will complete it.
+            for _ in 0..run.chars().count() {
+                self.input_buf.remove_char_before_cursor();
+            }
+        } else {
+            // Pass-through (e.g. `q`) or only partially buffered: keep it as
+            // literal text and leave the converter empty.
+            self.converters.romaji.reset();
+        }
     }
 
     /// Commit the current hiragana input (or katakana if in katakana mode)

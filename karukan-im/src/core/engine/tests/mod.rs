@@ -16,6 +16,7 @@ mod live_conversion;
 mod mode_toggle;
 mod passthrough;
 mod rewriter;
+mod romaji_revive;
 mod strategy;
 mod surrounding;
 
