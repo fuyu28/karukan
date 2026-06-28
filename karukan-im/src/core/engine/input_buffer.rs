@@ -87,9 +87,7 @@ impl InputBuffer {
     }
 
     /// Insert a single unit (raw → kana) at the cursor. `kana` may be multiple
-    /// characters (e.g. a youon like `きゃ`); it stays one atomic unit. (Wired
-    /// in P2.)
-    #[allow(dead_code)]
+    /// characters (e.g. a youon like `きゃ`); it stays one atomic unit.
     pub fn insert_unit(&mut self, raw: &str, kana: &str) {
         if kana.is_empty() {
             return;

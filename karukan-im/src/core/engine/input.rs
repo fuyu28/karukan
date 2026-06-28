@@ -207,7 +207,7 @@ impl InputMethodEngine {
         if self.input_mode == InputMode::Alphabet {
             self.input_buf.insert(&ch.to_string());
         } else {
-            let prev_output_len = 0;
+            // Converter was just reset, so every unit it now produces is new.
             let _event = self.converters.romaji.push(ch);
             let romaji_buffer = self.converters.romaji.buffer().to_string();
 
@@ -220,17 +220,11 @@ impl InputMethodEngine {
                 return EngineResult::not_consumed();
             }
 
-            // Consume new converter output into composed_hiragana
-            let new_output_len = self.converters.romaji.output().chars().count();
-            if new_output_len > prev_output_len {
-                let new_chars: String = self
-                    .converters
-                    .romaji
-                    .output()
-                    .chars()
-                    .skip(prev_output_len)
-                    .collect();
-                self.input_buf.insert(&new_chars);
+            // Consume new converter units into composed_hiragana, preserving the
+            // raw → kana pairing (one push may emit several units via recursion).
+            let new_units = self.converters.romaji.units().to_vec();
+            for (raw, kana) in new_units {
+                self.input_buf.insert_unit(&raw, &kana);
             }
         }
 
@@ -378,23 +372,15 @@ impl InputMethodEngine {
         // deleting the `ぱ`) can still combine: `k` + `a` → `か`, not `kあ`.
         self.revive_pending_romaji_prefix();
 
-        let prev_output_len = self.converters.romaji.output().chars().count();
+        let prev_units = self.converters.romaji.units().len();
         let _event = self.converters.romaji.push(ch);
-        let curr_output_len = self.converters.romaji.output().chars().count();
 
-        // Consume ALL new converter output into composed_hiragana at cursor position.
-        // The converter may recursively pass through multiple chars (e.g., "thx" →
-        // output="th", buffer="x"), so capture all of them via delta detection.
-        // PassThrough chars are already included in the converter output.
-        if curr_output_len > prev_output_len {
-            let new_chars: String = self
-                .converters
-                .romaji
-                .output()
-                .chars()
-                .skip(prev_output_len)
-                .collect();
-            self.input_buf.insert(&new_chars);
+        // Consume ALL new converter units into composed_hiragana at the cursor,
+        // preserving each unit's raw → kana pairing. One push may emit several
+        // units via recursive pass-through (e.g. "thx" → output="th", buffer="x").
+        let new_units = self.converters.romaji.units()[prev_units..].to_vec();
+        for (raw, kana) in new_units {
+            self.input_buf.insert_unit(&raw, &kana);
         }
 
         // PassThrough chars no longer auto-commit. They accumulate in the preedit

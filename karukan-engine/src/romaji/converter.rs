@@ -30,6 +30,12 @@ pub struct RomajiConverter {
     trie: TrieNode,
     buffer: String,
     output: String,
+    /// Per-conversion (raw, kana) pairs, accumulated in lockstep with `output`
+    /// (concatenating every unit's kana always equals `output`). Lets callers
+    /// recover the originally-typed romaji for each kana segment — used to build
+    /// `InputBuffer` units so F9/F10 can convert back to the raw input. Read as
+    /// a delta (units since a captured length), mirroring how `output` is read.
+    units: Vec<(String, String)>,
 }
 
 impl RomajiConverter {
@@ -39,7 +45,16 @@ impl RomajiConverter {
             trie: build_rules(),
             buffer: String::new(),
             output: String::new(),
+            units: Vec::new(),
         }
+    }
+
+    /// Record a (raw, kana) unit and append its kana to `output` in one step,
+    /// keeping the two in lockstep. `raw` is the consumed keystrokes; capture it
+    /// from `buffer` *before* draining.
+    fn record_unit(&mut self, raw: String, kana: &str) {
+        self.output.push_str(kana);
+        self.units.push((raw, kana.to_string()));
     }
 
     /// Push a character and attempt conversion
@@ -79,7 +94,7 @@ impl RomajiConverter {
         if char_count >= 3 && chars[0] == 'n' && chars[1] == 'n' {
             // "nn" is always a single ん, rest is processed separately
             self.buffer.drain(..2);
-            self.output.push('ん');
+            self.record_unit("nn".to_string(), "ん");
             return self.convert_with_remainder("ん".to_string());
         }
 
@@ -99,42 +114,53 @@ impl RomajiConverter {
                 // Keep everything before that position plus the last character
                 let prefix: String = chars.iter().take(char_count - 2).collect();
                 self.buffer = format!("{}{}", prefix, last);
-                self.output.push('ん');
+                // Only the single `n` at position len-2 is consumed into ん.
+                self.record_unit("n".to_string(), "ん");
                 return self.convert_with_remainder("ん".to_string());
             }
 
             // Double consonant rule: same consonant twice (except 'n') -> っ + consonant
             if last == second_last && !matches!(last, 'a' | 'i' | 'u' | 'e' | 'o' | 'n') {
-                // Convert to sokuon and keep the last consonant
+                // Convert to sokuon and keep the last consonant. The consumed
+                // raw is the first of the doubled consonant (e.g. `kka` → っ
+                // from the first `k`).
                 self.buffer = last.to_string();
-                self.output.push('っ');
+                self.record_unit(last.to_string(), "っ");
                 return ConversionEvent::Converted("っ".to_string());
             }
         }
 
-        // Search for longest match
+        // Search for longest match. Own the matched kana (and copy the small
+        // fields) so the trie borrow ends here — `record_unit` needs `&mut self`.
         let search = self.trie.search_longest(&self.buffer);
+        let matched_len = search.matched_len;
+        let has_continuation = search.has_continuation;
+        let matched_output = search.output.map(str::to_string);
 
-        if let Some(hiragana) = search.output {
+        if let Some(hiragana) = matched_output {
             // Found a match
-            if search.has_continuation && search.matched_len == self.buffer.len() {
+            if has_continuation && matched_len == self.buffer.len() {
                 // This is a valid conversion, but there might be longer matches
                 // Wait for more input unless it's "n'" or "nn"
                 if self.buffer == "n'" || self.buffer == "nn" {
-                    // Special case: always convert n' and nn immediately
-                    self.output.push_str(hiragana);
+                    // Special case: always convert n' and nn immediately. The
+                    // whole buffer is consumed as this unit's raw.
+                    let raw = self.buffer.clone();
+                    self.record_unit(raw, &hiragana);
                     self.buffer.clear();
-                    return ConversionEvent::Converted(hiragana.to_string());
+                    return ConversionEvent::Converted(hiragana);
                 }
                 // Otherwise, wait for more input
                 return ConversionEvent::Buffered;
             } else {
-                // Convert and keep remainder in buffer
-                self.output.push_str(hiragana);
-                self.buffer.drain(..search.matched_len);
-                return self.convert_with_remainder(hiragana.to_string());
+                // Convert and keep remainder in buffer. The consumed raw is the
+                // matched prefix (romaji is ASCII, so bytes == chars).
+                let raw = self.buffer[..matched_len].to_string();
+                self.record_unit(raw, &hiragana);
+                self.buffer.drain(..matched_len);
+                return self.convert_with_remainder(hiragana);
             }
-        } else if search.matched_len == 0 {
+        } else if matched_len == 0 {
             // No match at all
             // Check if the first character could start a valid conversion
             let Some(first_char) = self.buffer.chars().next() else {
@@ -164,16 +190,19 @@ impl RomajiConverter {
 
             // First character doesn't start any rule, or buffer is not on valid path
             let first_search = self.trie.search_longest(&first_char.to_string());
+            let first_len = first_search.matched_len;
+            let first_output = first_search.output.map(str::to_string);
 
-            if let Some(hiragana) = first_search.output {
+            if let Some(hiragana) = first_output {
                 // First character has a valid conversion, use it
-                self.output.push_str(hiragana);
-                self.buffer.drain(..first_search.matched_len);
-                return self.convert_with_remainder(hiragana.to_string());
+                let raw = self.buffer[..first_len].to_string();
+                self.record_unit(raw, &hiragana);
+                self.buffer.drain(..first_len);
+                return self.convert_with_remainder(hiragana);
             } else {
-                // No possible match, pass through the first character
+                // No possible match, pass through the first character (raw == kana)
                 self.buffer.remove(0);
-                self.output.push(first_char);
+                self.record_unit(first_char.to_string(), &first_char.to_string());
 
                 // Try to convert remainder after pass-through
                 if !self.buffer.is_empty() {
@@ -199,20 +228,23 @@ impl RomajiConverter {
 
         while !self.buffer.is_empty() {
             let search = self.trie.search_longest(&self.buffer);
+            let matched_len = search.matched_len;
+            let matched_output = search.output.map(str::to_string);
 
-            if let Some(h) = search.output {
-                result.push_str(h);
-                self.output.push_str(h);
-                self.buffer.drain(..search.matched_len);
+            if let Some(h) = matched_output {
+                result.push_str(&h);
+                let raw = self.buffer[..matched_len].to_string();
+                self.record_unit(raw, &h);
+                self.buffer.drain(..matched_len);
             } else if let Some(ch) = self.buffer.chars().next() {
                 // No conversion rule matched. A lone `n` at flush time is the
                 // moraic nasal ん: nothing more is coming that could turn it into
                 // `na`/`ni`/…, so it can only be ん (this is why `hon` commits as
                 // ほん, not ほn). Every other bare consonant has no standalone
-                // kana and passes through literally.
+                // kana and passes through literally. Raw is the original char.
                 let mapped = if ch == 'n' { 'ん' } else { ch };
                 result.push(mapped);
-                self.output.push(mapped);
+                self.record_unit(ch.to_string(), &mapped.to_string());
                 self.buffer.remove(0);
             }
         }
@@ -225,6 +257,22 @@ impl RomajiConverter {
         if let Some(ch) = self.buffer.pop() {
             BackspaceResult::RemovedBuffer(ch)
         } else if let Some(ch) = self.output.pop() {
+            // Keep `units` in lockstep with `output`: drop the last kana char
+            // from the trailing unit, removing the unit if it empties. Raw for
+            // that mora degrades to kana. (Unreachable from the engine, which
+            // only calls backspace while the buffer is non-empty, but keeps the
+            // public-API invariant `concat(units.kana) == output` intact.)
+            if let Some(last) = self.units.last_mut() {
+                let mut chars = last.1.chars();
+                chars.next_back();
+                let rest: String = chars.collect();
+                if rest.is_empty() {
+                    self.units.pop();
+                } else {
+                    last.1 = rest.clone();
+                    last.0 = rest;
+                }
+            }
             BackspaceResult::RemovedOutput(ch)
         } else {
             BackspaceResult::Empty
@@ -246,10 +294,17 @@ impl RomajiConverter {
         &self.buffer
     }
 
+    /// Accumulated (raw, kana) units. Read as a delta: capture `units().len()`
+    /// before a `push`/`flush`, then take everything from that index onward.
+    pub fn units(&self) -> &[(String, String)] {
+        &self.units
+    }
+
     /// Reset the converter state
     pub fn reset(&mut self) {
         self.buffer.clear();
         self.output.clear();
+        self.units.clear();
     }
 
     /// Get both output and buffer as a single string
@@ -272,6 +327,96 @@ impl Default for RomajiConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Collect the converter's (raw, kana) units as borrowed pairs for terse
+    /// assertions.
+    fn units(conv: &RomajiConverter) -> Vec<(&str, &str)> {
+        conv.units()
+            .iter()
+            .map(|(r, k)| (r.as_str(), k.as_str()))
+            .collect()
+    }
+
+    fn push_str(conv: &mut RomajiConverter, s: &str) {
+        for c in s.chars() {
+            conv.push(c);
+        }
+    }
+
+    #[test]
+    fn test_units_basic_match() {
+        let mut conv = RomajiConverter::new();
+        push_str(&mut conv, "ka");
+        assert_eq!(units(&conv), vec![("ka", "か")]);
+    }
+
+    #[test]
+    fn test_units_sokuon_raw_is_first_consonant() {
+        // `kka` → っ from the first `k`, then か from `ka`.
+        let mut conv = RomajiConverter::new();
+        push_str(&mut conv, "kka");
+        assert_eq!(units(&conv), vec![("k", "っ"), ("ka", "か")]);
+        assert_eq!(conv.output(), "っか");
+    }
+
+    #[test]
+    fn test_units_nn_raw_is_nn() {
+        let mut conv = RomajiConverter::new();
+        push_str(&mut conv, "nn");
+        assert_eq!(units(&conv), vec![("nn", "ん")]);
+    }
+
+    #[test]
+    fn test_units_n_before_consonant_raw_is_single_n() {
+        // `nka` → ん from a single `n`, then か from `ka`.
+        let mut conv = RomajiConverter::new();
+        push_str(&mut conv, "nka");
+        assert_eq!(units(&conv), vec![("n", "ん"), ("ka", "か")]);
+        assert_eq!(conv.output(), "んか");
+    }
+
+    #[test]
+    fn test_units_youon_is_one_unit() {
+        let mut conv = RomajiConverter::new();
+        push_str(&mut conv, "kya");
+        assert_eq!(units(&conv), vec![("kya", "きゃ")]);
+    }
+
+    #[test]
+    fn test_units_punctuation_keeps_typed_raw() {
+        // `!` has a trie rule to full-width `！`; the typed `!` is kept as raw so
+        // F10 can recover it.
+        let mut conv = RomajiConverter::new();
+        push_str(&mut conv, "a!");
+        assert_eq!(units(&conv), vec![("a", "あ"), ("!", "！")]);
+    }
+
+    #[test]
+    fn test_units_lone_n_flush_raw_is_n() {
+        let mut conv = RomajiConverter::new();
+        conv.push('n');
+        conv.flush();
+        assert_eq!(units(&conv), vec![("n", "ん")]);
+    }
+
+    #[test]
+    fn test_units_kana_concat_equals_output() {
+        // Invariant: concatenating every unit's kana reproduces `output`.
+        let mut conv = RomajiConverter::new();
+        push_str(&mut conv, "konnnichiha");
+        let joined: String = conv.units().iter().map(|(_, k)| k.as_str()).collect();
+        assert_eq!(joined, conv.output());
+        assert_eq!(conv.output(), "こんにちは");
+    }
+
+    #[test]
+    fn test_units_reset_clears() {
+        let mut conv = RomajiConverter::new();
+        push_str(&mut conv, "ka");
+        assert!(!conv.units().is_empty());
+        conv.reset();
+        assert!(conv.units().is_empty());
+    }
 
     #[test]
     fn test_basic_conversion() {

@@ -358,18 +358,12 @@ impl InputMethodEngine {
         if self.converters.romaji.buffer().is_empty() {
             return;
         }
-        let prev_output_len = self.converters.romaji.output().chars().count();
+        let prev_units = self.converters.romaji.units().len();
         let _flushed = self.converters.romaji.flush();
-        // flush() appends converted buffer to output internally
-        let new_from_flush: String = self
-            .converters
-            .romaji
-            .output()
-            .chars()
-            .skip(prev_output_len)
-            .collect();
-        if !new_from_flush.is_empty() {
-            self.input_buf.insert(&new_from_flush);
+        // flush() records the flushed buffer as units (kana appended to output).
+        let new_units = self.converters.romaji.units()[prev_units..].to_vec();
+        for (raw, kana) in new_units {
+            self.input_buf.insert_unit(&raw, &kana);
         }
     }
 
