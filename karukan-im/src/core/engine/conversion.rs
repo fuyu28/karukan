@@ -45,6 +45,17 @@ fn shape_text(reading: &str, shape: ConversionShape) -> String {
     }
 }
 
+/// Like [`shape_text`], but the alnum shapes (F9 全角英数 / F10 半角英数)
+/// operate on the *raw* keystrokes so they recover the originally-typed romaji
+/// (e.g. `ぎてゅb` → `github`), while the kana shapes (F6/F7/F8) operate on the
+/// kana reading.
+fn shape_text_for(kana_reading: &str, raw_reading: &str, shape: ConversionShape) -> String {
+    match shape {
+        ConversionShape::FullAlnum | ConversionShape::HalfAlnum => shape_text(raw_reading, shape),
+        _ => shape_text(kana_reading, shape),
+    }
+}
+
 /// Mozc-style width/script annotation derived from a candidate's *text* (not
 /// the shape that produced it), so a cross-script no-op — e.g. a latin reading
 /// whose "hiragana" form is the latin itself — is labelled by what it actually
@@ -346,21 +357,22 @@ impl InputMethodEngine {
         self.converters.romaji.reset();
         self.input_buf.cursor_pos = 0;
 
-        let reading = self.input_buf.text();
-        if reading.is_empty() {
+        let kana_reading = self.input_buf.text();
+        if kana_reading.is_empty() {
             return EngineResult::consumed();
         }
+        // F9/F10 reshape the raw keystrokes (the typed romaji), the kana shapes
+        // reshape the kana reading. See `shape_text_for`.
+        let raw_reading = self.input_buf.raw_text();
 
-        // Build the F6→F10 forms in order, deduping identical forms (e.g. the
-        // alnum shapes are no-ops on a kana reading and collapse into the
-        // hiragana form). Track which surviving entry matches the pressed
-        // shape so it starts selected.
-        let target = shape_text(&reading, shape);
+        // Build the F6→F10 forms in order, deduping identical forms. Track which
+        // surviving entry matches the pressed shape so it starts selected.
+        let target = shape_text_for(&kana_reading, &raw_reading, shape);
         let mut seen = HashSet::new();
         let mut candidates: Vec<Candidate> = Vec::new();
         let mut selected = 0;
         for s in ConversionShape::ALL {
-            let text = shape_text(&reading, s);
+            let text = shape_text_for(&kana_reading, &raw_reading, s);
             if !seen.insert(text.clone()) {
                 continue;
             }
@@ -370,7 +382,8 @@ impl InputMethodEngine {
             let description = form_annotation(&text).map(str::to_string);
             candidates.push(Candidate {
                 text,
-                reading: Some(reading.clone()),
+                // Learning key stays the kana reading regardless of shape.
+                reading: Some(kana_reading.clone()),
                 source_label: Some(CandidateSource::Rewriter.label().to_string()),
                 description,
             });
@@ -378,7 +391,7 @@ impl InputMethodEngine {
 
         let mut candidate_list = CandidateList::new(candidates);
         candidate_list.select(selected);
-        self.enter_conversion_state(&reading, candidate_list)
+        self.enter_conversion_state(&kana_reading, candidate_list)
     }
 
     /// Search user and system dictionaries for candidates matching a reading.
@@ -823,23 +836,19 @@ impl InputMethodEngine {
                 .with_action(EngineAction::HideAuxText);
         }
 
-        // Set up composed_hiragana with the reading
-        self.input_buf.clear();
-        self.input_buf.insert(&reading);
-
-        // Reset the romaji converter, then re-feed a kana reading so the
-        // converter's state mirrors the restored buffer (kana pass straight
-        // through). We must NOT re-feed a non-kana reading: for a latin acronym
-        // from Alphabet mode (e.g. `Jis`), the romaji rules buffer a trailing
-        // consonant — the `s` gets stuck and the preedit/commit corrupts into
-        // `Jiss`. Alphabet input bypasses the romaji converter anyway, so
-        // leaving it reset is correct. (Reachable via F6–F10 / Tab → Escape.)
+        // The input_buf units survived start_conversion intact (it never clears
+        // them), so they still carry each mora's raw — keep them as-is rather
+        // than rebuilding from the kana reading, so a following F9/F10 can still
+        // recover the typed romaji. Just drop any pending romaji and restore the
+        // cursor to the end.
+        //
+        // We deliberately do NOT re-feed the reading through the romaji
+        // converter: the units already mirror the buffer, and re-feeding a latin
+        // acronym from Alphabet mode (e.g. `Jis`) would buffer the trailing
+        // consonant and corrupt the preedit/commit into `Jiss`. (This path is
+        // reachable via F6–F10 / Tab → Escape.)
         self.converters.romaji.reset();
-        if karukan_engine::contains_kana(&reading) {
-            for ch in reading.chars() {
-                self.converters.romaji.push(ch);
-            }
-        }
+        self.input_buf.cursor_pos = self.input_buf.text().chars().count();
 
         let preedit = self.set_composing_state();
 

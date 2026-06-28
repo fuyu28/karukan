@@ -342,15 +342,9 @@ impl InputMethodEngine {
     /// Convert hiragana in input_buf to katakana permanently.
     /// Called when leaving Katakana mode so the preedit doesn't revert.
     fn bake_katakana(&mut self) {
-        if !self.input_buf.text().is_empty() {
-            // P1: rebuild as literal katakana units (raw==kana), preserving the
-            // cursor. P3 will preserve each unit's raw instead.
-            let kata = karukan_engine::hiragana_to_katakana(&self.input_buf.text());
-            let cursor = self.input_buf.cursor_pos;
-            self.input_buf.clear();
-            self.input_buf.insert(&kata);
-            self.input_buf.cursor_pos = cursor;
-        }
+        // Katakana-ize each unit's kana in place, keeping its raw so a later
+        // F9/F10 can still recover the typed romaji.
+        self.input_buf.bake_katakana();
     }
 
     /// Flush the romaji buffer and insert result at cursor position

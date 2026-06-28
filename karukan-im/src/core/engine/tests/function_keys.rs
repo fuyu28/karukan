@@ -107,8 +107,9 @@ fn test_f7_candidate_list_holds_all_forms_navigable_by_space() {
     engine.process_key(&press('i'));
 
     engine.process_key(&press_key(Keysym::F7));
-    // The list is the distinct F6→F10 forms in order; for a kana reading the
-    // alnum shapes are no-ops and dedup away, leaving hiragana/full/half kana.
+    // The list is the distinct F6→F10 forms in order: the kana shapes reshape
+    // the reading (あい), and F9/F10 reshape the *raw* keystrokes (`ai`) so they
+    // recover the typed romaji rather than dedup away.
     let texts: Vec<String> = engine
         .candidates()
         .unwrap()
@@ -116,7 +117,7 @@ fn test_f7_candidate_list_holds_all_forms_navigable_by_space() {
         .iter()
         .map(|c| c.text.clone())
         .collect();
-    assert_eq!(texts, vec!["あい", "アイ", "ｱｲ"]);
+    assert_eq!(texts, vec!["あい", "アイ", "ｱｲ", "ａｉ", "ai"]);
     // F7's form (full katakana) is selected, not the first entry.
     assert_eq!(engine.preedit().unwrap().text(), "アイ");
 
@@ -161,6 +162,96 @@ fn test_f10_reshapes_reading_to_half_width_alnum() {
     engine.process_key(&press_key(Keysym::F10));
     assert_eq!(engine.preedit().unwrap().text(), "Iso");
     assert_eq!(selected_description(&engine).as_deref(), Some("[半]英数"));
+}
+
+#[test]
+fn test_f10_recovers_typed_romaji_from_kana_reading() {
+    // The headline case: typing `github` in hiragana mode produces a kana
+    // preedit, but F10 recovers the originally-typed romaji `github` (and F9
+    // its full-width form), thanks to per-unit raw tracking.
+    let mut engine = InputMethodEngine::new();
+    for c in "github".chars() {
+        engine.process_key(&press(c));
+    }
+
+    // F9 → full-width romaji.
+    engine.process_key(&press_key(Keysym::F9));
+    assert_eq!(engine.preedit().unwrap().text(), "ｇｉｔｈｕｂ");
+
+    // F10 → half-width romaji: back to exactly what was typed.
+    engine.process_key(&press_key(Keysym::F10));
+    assert_eq!(engine.preedit().unwrap().text(), "github");
+
+    let commit = engine.process_key(&press_key(Keysym::RETURN));
+    assert_eq!(commit_text(&commit).as_deref(), Some("github"));
+}
+
+#[test]
+fn test_f10_recovers_youon_romaji() {
+    // A youon is one unit (raw `kya`, kana `きゃ`); F10 recovers `kya`.
+    let mut engine = InputMethodEngine::new();
+    for c in "kya".chars() {
+        engine.process_key(&press(c));
+    }
+    assert_eq!(engine.preedit().unwrap().text(), "きゃ");
+
+    engine.process_key(&press_key(Keysym::F10));
+    assert_eq!(engine.preedit().unwrap().text(), "kya");
+}
+
+#[test]
+fn test_edit_only_loses_raw_for_the_edited_mora() {
+    // `kyaki` → きゃき is three units: きゃ(kya), き(ki). Backspacing the last
+    // き removes a whole single-char unit, leaving きゃ with its raw intact, so
+    // F10 still recovers `kya`.
+    let mut engine = InputMethodEngine::new();
+    for c in "kyaki".chars() {
+        engine.process_key(&press(c));
+    }
+    assert_eq!(engine.preedit().unwrap().text(), "きゃき");
+
+    engine.process_key(&press_key(Keysym::BACKSPACE));
+    assert_eq!(engine.preedit().unwrap().text(), "きゃ");
+
+    engine.process_key(&press_key(Keysym::F10));
+    assert_eq!(engine.preedit().unwrap().text(), "kya");
+}
+
+#[test]
+fn test_f10_after_f_key_escape_still_recovers_raw() {
+    // cancel_conversion keeps the units (with raw) instead of rebuilding from
+    // the kana reading, so F9 → Escape → F10 still recovers the typed romaji.
+    let mut engine = InputMethodEngine::new();
+    engine.process_key(&press('a'));
+    engine.process_key(&press('i'));
+
+    engine.process_key(&press_key(Keysym::F9));
+    assert!(matches!(engine.state(), InputState::Conversion { .. }));
+    assert_eq!(engine.preedit().unwrap().text(), "ａｉ");
+
+    engine.process_key(&press_key(Keysym::ESCAPE));
+    assert!(matches!(engine.state(), InputState::Composing { .. }));
+
+    engine.process_key(&press_key(Keysym::F10));
+    assert_eq!(engine.preedit().unwrap().text(), "ai");
+}
+
+#[test]
+fn test_katakana_bake_preserves_raw_for_f10() {
+    // Katakana mode then Shift+letter bakes the kana to katakana; the bake now
+    // preserves each unit's raw, so F10 still recovers the typed romaji.
+    let mut engine = InputMethodEngine::new();
+    engine.process_key(&press('k'));
+    engine.process_key(&press('a'));
+    engine.process_key(&press_ctrl(Keysym::KEY_K)); // enter katakana mode
+    assert_eq!(engine.preedit().unwrap().text(), "カ");
+
+    // Shift+B → bake カ (raw "ka" kept) + enter alphabet, append B.
+    engine.process_key(&press_shift('B'));
+    assert_eq!(engine.preedit().unwrap().text(), "カB");
+
+    engine.process_key(&press_key(Keysym::F10));
+    assert_eq!(engine.preedit().unwrap().text(), "kaB");
 }
 
 #[test]

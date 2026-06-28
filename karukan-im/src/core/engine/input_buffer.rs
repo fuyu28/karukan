@@ -62,10 +62,18 @@ impl InputBuffer {
     }
 
     /// Concatenation of every unit's raw keystrokes — the originally-typed
-    /// input, used by F9/F10 to recover romaji. (Wired in P3.)
-    #[allow(dead_code)]
+    /// input, used by F9/F10 to recover romaji.
     pub fn raw_text(&self) -> String {
         self.units.iter().map(|u| u.raw.as_str()).collect()
+    }
+
+    /// Convert every unit's kana to full-width katakana in place, preserving
+    /// each unit's raw so F9/F10 can still recover the typed romaji. Katakana
+    /// conversion is 1:1 per char, so `cursor_pos` stays valid.
+    pub fn bake_katakana(&mut self) {
+        for unit in &mut self.units {
+            unit.kana = karukan_engine::hiragana_to_katakana(&unit.kana);
+        }
     }
 
     /// Total kana-char length.
