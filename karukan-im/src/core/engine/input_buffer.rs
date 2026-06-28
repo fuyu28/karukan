@@ -16,8 +16,6 @@
 /// One input unit: the kana shown in the preedit plus the raw keystrokes that
 /// produced it. For literal input (alphabet/emoji/space) `raw == kana`.
 struct Unit {
-    // Wired in P2 (converter raw tracking) / P3 (F9/F10 raw recovery).
-    #[allow(dead_code)]
     raw: String,
     kana: String,
 }
