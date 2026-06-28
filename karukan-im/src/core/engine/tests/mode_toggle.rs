@@ -36,7 +36,7 @@ fn test_hiragana_key_switches_katakana_to_hiragana() {
     let result = engine.process_key(&press_key(Keysym::HIRAGANA));
     assert!(result.consumed);
     assert!(engine.input_mode == InputMode::Hiragana);
-    assert_eq!(engine.input_buf.text, "アイ");
+    assert_eq!(engine.input_buf.text(), "アイ");
 }
 
 #[test]

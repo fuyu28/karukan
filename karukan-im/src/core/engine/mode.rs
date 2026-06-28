@@ -19,7 +19,7 @@ impl InputMethodEngine {
 
         let romaji_buffer = self.converters.romaji.buffer().to_string();
 
-        if self.input_buf.text.is_empty() && romaji_buffer.is_empty() {
+        if self.input_buf.text().is_empty() && romaji_buffer.is_empty() {
             return EngineResult::consumed();
         }
 

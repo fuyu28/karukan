@@ -232,7 +232,7 @@ impl InputMethodEngine {
         // Flush any remaining romaji into composed_hiragana
         self.flush_romaji_to_composed();
 
-        let reading = self.input_buf.text.clone();
+        let reading = self.input_buf.text();
 
         // Save auto-suggest/live conversion result before clearing state.
         // This ensures the candidate that was displayed during input is preserved
@@ -346,7 +346,7 @@ impl InputMethodEngine {
         self.converters.romaji.reset();
         self.input_buf.cursor_pos = 0;
 
-        let reading = self.input_buf.text.clone();
+        let reading = self.input_buf.text();
         if reading.is_empty() {
             return EngineResult::consumed();
         }
@@ -766,7 +766,7 @@ impl InputMethodEngine {
         }
 
         self.state = InputState::Empty;
-        self.input_buf.text.clear();
+        self.input_buf.clear();
         self.exit_emoji_mode();
         self.exit_alphabet_mode();
 
@@ -790,7 +790,7 @@ impl InputMethodEngine {
         }
 
         self.state = InputState::Empty;
-        self.input_buf.text.clear();
+        self.input_buf.clear();
         self.exit_emoji_mode();
         // Revert transient Alphabet before starting the new input so the typed
         // continuation character lands in the base mode, not alphabet.
@@ -812,7 +812,7 @@ impl InputMethodEngine {
         if !matches!(self.state, InputState::Conversion { .. }) {
             return EngineResult::not_consumed();
         }
-        let reading = self.input_buf.text.clone();
+        let reading = self.input_buf.text();
 
         if reading.is_empty() {
             self.state = InputState::Empty;
@@ -824,8 +824,8 @@ impl InputMethodEngine {
         }
 
         // Set up composed_hiragana with the reading
-        self.input_buf.text = reading.clone();
-        self.input_buf.cursor_pos = self.input_buf.text.chars().count();
+        self.input_buf.clear();
+        self.input_buf.insert(&reading);
 
         // Reset the romaji converter, then re-feed a kana reading so the
         // converter's state mirrors the restored buffer (kana pass straight

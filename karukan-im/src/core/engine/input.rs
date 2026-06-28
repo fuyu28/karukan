@@ -20,7 +20,7 @@ impl InputMethodEngine {
         // so a mixed reading like `きょうはABC` keeps live-converting.)
         if self.input_mode == InputMode::Alphabet
             && !self.live.text.is_empty()
-            && !karukan_engine::contains_kana(&self.input_buf.text)
+            && !karukan_engine::contains_kana(&self.input_buf.text())
         {
             let preedit = self.set_composing_state();
             return EngineResult::consumed().with_action(EngineAction::UpdatePreedit(preedit));
@@ -33,11 +33,11 @@ impl InputMethodEngine {
         // stays alive. `chunked_auto_suggest` splits long input into
         // bounded-length chunks so per-keystroke latency stays flat; for input
         // within one chunk this is identical to a whole-buffer call.
-        let convert = !self.input_buf.text.is_empty()
+        let convert = !self.input_buf.text().is_empty()
             && (self.input_mode != InputMode::Alphabet
-                || karukan_engine::contains_kana(&self.input_buf.text));
+                || karukan_engine::contains_kana(&self.input_buf.text()));
         let candidates = if convert {
-            let reading = self.input_buf.text.clone();
+            let reading = self.input_buf.text();
             self.chunked_auto_suggest()
                 .map(|converted| (vec![converted], reading))
         } else {
@@ -51,7 +51,7 @@ impl InputMethodEngine {
             // (e.g. `「` → `『`, `【`, ...) for symbol-only inputs where the model is skipped.
             self.live.text.clear();
             let preedit = self.set_composing_state();
-            let reading = self.input_buf.text.clone();
+            let reading = self.input_buf.text();
             let mut all_candidates = self.lookup_learning_candidates(&reading);
             append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
             append_candidates_dedup(&mut all_candidates, self.lookup_rewriter_variants(&reading));
@@ -86,7 +86,7 @@ impl InputMethodEngine {
                 .collect();
             append_candidates_dedup(&mut all_candidates, model_candidates);
             append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
-            let aux = self.format_aux_suggest(&self.input_buf.text.clone());
+            let aux = self.format_aux_suggest(&self.input_buf.text());
             return EngineResult::consumed()
                 .with_action(EngineAction::UpdatePreedit(preedit))
                 .with_action(EngineAction::ShowCandidates(CandidateList::new(
@@ -108,7 +108,7 @@ impl InputMethodEngine {
         append_candidates_dedup(&mut all_candidates, model_candidates);
         // Then dictionary candidates
         append_candidates_dedup(&mut all_candidates, self.lookup_dict_candidates(&reading));
-        let aux = self.format_aux_suggest(&self.input_buf.text.clone());
+        let aux = self.format_aux_suggest(&self.input_buf.text());
         EngineResult::consumed()
             .with_action(EngineAction::UpdatePreedit(preedit))
             .with_action(EngineAction::ShowCandidates(CandidateList::new(
@@ -436,7 +436,7 @@ impl InputMethodEngine {
             return;
         }
         // Maximal run of ASCII letters immediately before the cursor.
-        let chars: Vec<char> = self.input_buf.text.chars().collect();
+        let chars: Vec<char> = self.input_buf.text().chars().collect();
         let mut start = cursor;
         while start > 0 && chars[start - 1].is_ascii_alphabetic() {
             start -= 1;
@@ -472,7 +472,7 @@ impl InputMethodEngine {
         // Flush any pending romaji into composed_hiragana
         self.flush_romaji_to_composed();
 
-        let reading = self.input_buf.text.clone();
+        let reading = self.input_buf.text();
         let text = if self.input_mode == InputMode::Emoji {
             // Emoji mode: Enter should select the first emoji candidate the
             // EmojiRewriter would surface, not commit the literal `:smile`.
@@ -551,8 +551,8 @@ impl InputMethodEngine {
         // discard the typed characters which is surprising when the
         // user just wanted to dismiss the candidate list.
         let emoji_literal =
-            if self.input_mode == InputMode::Emoji && !self.input_buf.text.is_empty() {
-                Some(self.input_buf.text.clone())
+            if self.input_mode == InputMode::Emoji && !self.input_buf.text().is_empty() {
+                Some(self.input_buf.text())
             } else {
                 None
             };

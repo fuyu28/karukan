@@ -350,16 +350,16 @@ fn test_cursor_composed_hiragana_tracking() {
     engine.process_key(&press('i'));
 
     // Check internal state
-    assert_eq!(engine.input_buf.text, "あい");
+    assert_eq!(engine.input_buf.text(), "あい");
     assert_eq!(engine.input_buf.cursor_pos, 2);
 
     // Move left
     engine.process_key(&press_key(Keysym::LEFT));
-    assert_eq!(engine.input_buf.text, "あい");
+    assert_eq!(engine.input_buf.text(), "あい");
     assert_eq!(engine.input_buf.cursor_pos, 1);
 
     // Cancel should clear
     engine.process_key(&press_key(Keysym::ESCAPE));
-    assert_eq!(engine.input_buf.text, "");
+    assert_eq!(engine.input_buf.text(), "");
     assert_eq!(engine.input_buf.cursor_pos, 0);
 }

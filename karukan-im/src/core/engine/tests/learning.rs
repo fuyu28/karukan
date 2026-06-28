@@ -61,7 +61,7 @@ fn tab_key_skips_learning_in_composing() {
 
     engine.process_key(&press('a'));
     engine.process_key(&press('i'));
-    assert_eq!(engine.input_buf.text, "あい");
+    assert_eq!(engine.input_buf.text(), "あい");
 
     let result = engine.process_key(&press_key(Keysym::TAB));
     assert!(result.consumed);

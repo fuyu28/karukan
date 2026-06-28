@@ -57,7 +57,7 @@ impl InputMethodEngine {
 
     /// Move caret right within hiragana input
     pub(super) fn move_caret_right(&mut self) -> EngineResult {
-        let total = self.input_buf.text.chars().count();
+        let total = self.input_buf.text().chars().count();
         let new_pos = (self.input_buf.cursor_pos + 1).min(total);
         self.move_caret(new_pos)
     }
@@ -88,7 +88,7 @@ impl InputMethodEngine {
 
     /// Move caret to end of input
     pub(super) fn move_caret_end(&mut self) -> EngineResult {
-        let total = self.input_buf.text.chars().count();
+        let total = self.input_buf.text().chars().count();
         self.move_caret(total)
     }
 }

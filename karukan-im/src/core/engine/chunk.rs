@@ -185,7 +185,7 @@ impl InputMethodEngine {
     /// N=30) this produces exactly one model call over the whole buffer, i.e.
     /// identical behavior to a whole-buffer conversion.
     pub(super) fn chunked_auto_suggest(&mut self) -> Option<String> {
-        let full_reading = self.input_buf.text.clone();
+        let full_reading = self.input_buf.text();
         if full_reading.is_empty() {
             self.chunks.clear();
             return None;

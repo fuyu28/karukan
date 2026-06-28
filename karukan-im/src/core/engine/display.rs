@@ -9,13 +9,13 @@ impl InputMethodEngine {
     pub(super) fn build_input_display(&self) -> String {
         let before: String = self
             .input_buf
-            .text
+            .text()
             .chars()
             .take(self.input_buf.cursor_pos)
             .collect();
         let after: String = self
             .input_buf
-            .text
+            .text()
             .chars()
             .skip(self.input_buf.cursor_pos)
             .collect();
@@ -148,10 +148,10 @@ impl InputMethodEngine {
         let indicator = self.mode_indicator();
         // Show reading + unconverted romaji buffer (e.g. "わせだd")
         let romaji_buf = self.converters.romaji.buffer();
-        let reading = if self.input_buf.text.is_empty() && romaji_buf.is_empty() {
+        let reading = if self.input_buf.text().is_empty() && romaji_buf.is_empty() {
             String::new()
         } else {
-            format!(" {}{}", self.input_buf.text, romaji_buf)
+            format!(" {}{}", self.input_buf.text(), romaji_buf)
         };
         if ctx.is_empty() {
             format!("{}{} Karukan ({})", indicator, reading, model)

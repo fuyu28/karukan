@@ -342,8 +342,14 @@ impl InputMethodEngine {
     /// Convert hiragana in input_buf to katakana permanently.
     /// Called when leaving Katakana mode so the preedit doesn't revert.
     fn bake_katakana(&mut self) {
-        if !self.input_buf.text.is_empty() {
-            self.input_buf.text = karukan_engine::hiragana_to_katakana(&self.input_buf.text);
+        if !self.input_buf.text().is_empty() {
+            // P1: rebuild as literal katakana units (raw==kana), preserving the
+            // cursor. P3 will preserve each unit's raw instead.
+            let kata = karukan_engine::hiragana_to_katakana(&self.input_buf.text());
+            let cursor = self.input_buf.cursor_pos;
+            self.input_buf.clear();
+            self.input_buf.insert(&kata);
+            self.input_buf.cursor_pos = cursor;
         }
     }
 
@@ -544,7 +550,7 @@ impl InputMethodEngine {
             InputState::Composing { .. } => {
                 // Flush romaji buffer into composed_hiragana
                 self.flush_romaji_to_composed();
-                let reading = self.input_buf.text.clone();
+                let reading = self.input_buf.text();
                 let text = if !self.live.text.is_empty() {
                     self.live.text.clone()
                 } else {
